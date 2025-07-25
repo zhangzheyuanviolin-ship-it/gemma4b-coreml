@@ -1,0 +1,65 @@
+name: Convert Gemma4B to CoreML
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  convert:
+    runs-on: macos-13
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip setuptools wheel "numpy<2"
+          pip install -U "transformers<5" huggingface_hub coremltools==7.1
+          pip install "optimum-coreml @ git+https://github.com/huggingface/optimum-coreml.git@main"
+
+      - name: Download Gemma 3-4B QAT 4bit
+        env:
+          HF_HUB_ENABLE_HF_TRANSFER: 1
+        run: |
+          python - <<'PY'
+          import pathlib
+          from huggingface_hub import snapshot_download
+          out_dir = pathlib.Path("gemma4b_qat")
+          snapshot_download(repo_id="mlx-community/gemma-3-4b-qat",
+                            local_dir=str(out_dir),
+                            revision=None)
+          print(">> Downloaded to", out_dir.resolve())
+          PY
+
+      - name: Export to CoreML
+        run: |
+          python - <<'PY'
+          import pathlib
+          from optimum.coreml import CoreMLModel
+          in_dir = "gemma4b_qat"
+          out_dir = pathlib.Path("gemma4b_coreml")
+          out_dir.mkdir(exist_ok=True)
+          model = CoreMLModel.from_pretrained(in_dir)
+          model.save_precompiled(out_dir)
+          print(">> Saved CoreML to", out_dir.resolve())
+          PY
+
+      - name: Zip model folder
+        run: |
+          zip -r gemma4b_coreml.zip gemma4b_coreml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemma4b_coreml
+          path: gemma4b_coreml.zip
